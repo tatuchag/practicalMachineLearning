@@ -1,0 +1,279 @@
+---
+title: "Course Project"
+author: "Renata Guanaes Machado"
+date: "30/03/2021"
+output:
+  html_document: default
+  pdf_document: default
+subtitle: Practical Machine Learning (*from Data Science Specialization*)
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::include_graphics
+```
+
+## **Executive Summary**
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. Using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, the goal of this project is to predict the manner in which they did the exercise - in other words, **to predict the “class” according to existing and chosen predictors**. 
+
+A report should be made, describing:
+
+* how the model was built;
+* how cross validation was used;
+* what the expected out of sample error is;
+* why the choices were made. 
+
+
+More information can be accessed in this link: http://groupware.les.inf.puc-rio.br/har
+
+### **Libraries and Setup**
+
+```{r message=FALSE, warning=FALSE, include=TRUE}
+library(caret)
+library(randomForest)
+library(e1071)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(rattle)
+library(doParallel)
+set.seed(42)
+setwd("~/data")
+```
+
+### **Loading train and test datasets**
+
+The raw data comes from files that are loaded into train and test dataframes.
+```{r}
+pmlTrain <- read.csv('pml-training.csv', header=TRUE,
+                     stringsAsFactors = F, na.strings = c("","NA","#DIV/0!"))
+pmlTest  <- read.csv('pml-testing.csv', header=TRUE,
+                     stringsAsFactors = F, na.strings = c("","NA", "#DIV/0!"))
+dim(pmlTrain); dim(pmlTest)
+```
+
+### **Checking missing values or non-predictor variables**
+
+Exclude columns that are only NAN values. Also, remove columns that are not predictors (examples: index, column user_name). These values were detected when running the command str() on pmlTrain and pmlTest - not showed here due to the high number of columns.
+```{r}
+pmlTrain <- pmlTrain[, colSums(is.na(pmlTrain)) == 0]
+pmlTest <-  pmlTest[, colSums(is.na(pmlTest)) == 0]
+pmlTrain <- pmlTrain[, -c(1:7)]
+pmlTest <-  pmlTest[, -c(1:7)]
+dim(pmlTrain); dim(pmlTest)
+```
+
+After cleaning, the number of predictors has decreased a lot. we have now the following data columns (predictors).
+```{r}
+colnames(pmlTrain)
+```
+
+
+### **Splitting Training Data**
+We need to split Training Data (pmlTrain) into training and testing datasets.
+
+* training: it is used to estimate the model parameters
+* testing: only after model building, it is used to assess model accuracy.
+```{r }
+set.seed(42)
+inTrain  <- createDataPartition(y=pmlTrain$classe,  p=0.8, list=FALSE)
+training <- pmlTrain[inTrain,]
+testing  <- pmlTrain[-inTrain,]
+dim(training); dim(testing)
+```
+
+### **Summary of Training dataset **
+It is important to check that all predictors are numeric (except for the class variable), in order to check if we need to convert categorical predictors to numeric type.
+```{r}
+str(training)
+```
+
+### **Exploratory Data Analysis**
+
+Checking classe distribution in order to verify if it is an imbalanced outcome.
+```{r}
+training$classe <- factor(training$classe)
+testing$classe <- factor(testing$classe)
+tab_classes <- as.data.frame(table(training$classe))
+tab_classes
+```
+
+
+```{r}
+ggplot(tab_classes, aes(x = Var1, y = Freq, fill = Var1)) +  # Plot with values on top
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Freq), vjust = 0)
+```
+
+
+### **Checking Correlation between variables** 
+Sometimes there will be variables that are highly correlated with each other. In this case, it's not useful to include every variable in the model.
+```{r}
+Corr <- abs(cor(training [, -53] ) )
+diag(Corr) <- 0
+which(Corr > 0.8, arr.ind=T)
+```
+
+### **Reducing Dimensionality: PCA**
+Dimensionality reduction involves decreasing the number of input variables (predictors) in modeling data. Therefore, PCA (Principal Components Analysis) will be performed as a pre-processing step to model buiding, in order to reduce the high dimensionality. We will use the R function  prcomp(). Using scale = TRUE means that variables should be scaled to have unit variance (standard deviation = 1).
+
+```{r}
+prin_comp <- prcomp(x = training[,-53], scale. = TRUE) # remove the Class variable
+```
+
+```{r}
+#biplot(prin_comp, scale=0)
+```
+
+Computing the proportion of variance explained by each component. Higher is the explained variance, higher will be the information contained in those components.
+Therefore, 37 components results in variance close to 99%.
+```{r}
+pr_var <- (prin_comp$sdev)^2
+prop_varex <- pr_var/sum(pr_var)
+#prop_varex[1:36]
+sum(prop_varex[1:36])
+```
+
+Plotting a cumulative variance plot shows the number of components that explains variability.
+```{r}
+plot(cumsum(prop_varex),  
+                  xlab="Principal Component",
+                  ylab="Cumulative Proportion of Variance Explained",
+                  type="b",
+                  main = "PCA - Cumulative Variance",
+                  pch=16, col="blue")
+axis(2, seq(0,1,0.1))
+```
+
+
+PCA using caret package (same results: 36 variables explain 99% variability).
+```{r}
+preproc <- preProcess(training[,-53], method='pca', thresh=0.99)
+trainingPCA <- predict(preproc, training[,-53])    
+testingPCA <- predict(preproc, testing[,-53])
+testing_to_predict.pca <- predict(preproc, testing[,-53])
+dim(trainingPCA)
+```
+
+
+
+### **Model building with PCA Components**
+```{r}
+# include Class
+trainingPCA <- data.frame(classe = training$classe, prin_comp$x)
+trainingPCA <- trainingPCA[,1:37]
+```
+
+
+### **Model building with training dataset**
+
+Using training dataset (not dataset transformed by PCA method), the following methods will be used to fit the model: 
+
+* Decision Tree (tree), 
+* RandomForest (rf) and 
+* Stochastic Gradient Boosting (gbm). 
+
+We can check which one provides the best out-of-sample accuracy.
+
+#### **Decision tree**
+```{r}
+set.seed(42)
+treeFit <- train(classe ~ ., method="rpart", data = training)
+#print(treeFit$finalModel) # hard to visualize
+fancyRpartPlot(treeFit$finalModel)
+```
+
+```{r}
+treePred <- predict(treeFit, newdata=testing)
+confusionMatrix(treePred, testing$classe)
+```
+
+#### **Random Forest**
+We are using trControl when fitting with RandomForests, which allows a much more precise manipulation of control parameters for training models. Cross validation is done for each model with K = 5.
+```{r}
+set.seed(42)
+ncores <- makeCluster(detectCores() - 1)
+registerDoParallel(cores=ncores)
+getDoParWorkers() # 3 
+
+rfFit <- train(classe ~ . , method = "rf", prox=TRUE, ntree = 100,
+               data = training,
+               importance=TRUE,
+               metric = "Accuracy",             # categorical outcome variable 
+               preProcess=c("center", "scale"), # normalize data
+               trControl=trainControl(method = "cv"
+                                        , number = 5  # folds for training data
+                                        , p= 0.60
+                                        , allowParallel = TRUE 
+                                        )
+                )
+stopCluster(ncores)
+```
+
+
+```{r}
+rfFit
+rfFit$finalModel
+```
+
+
+```{r}
+rfPred <- predict(rfFit, newdata=testing)
+confusionMatrix(rfPred, testing$classe)
+```
+
+Random Forest: the most important variables in the model.
+```{r}
+varImp(rfFit)
+```
+
+
+#### **GBM**
+```{r}
+
+gbmFit <- train(classe ~ . , method = "gbm", 
+               data = training,
+               verbose=FALSE,                   # less detailed summary 
+               metric = "Accuracy",             # categorical outcome variable 
+               preProcess=c("center", "scale"), # normalize data
+               trControl=trainControl(method = "repeatedcv",
+                                      number = 5,
+                                      repeats=1))
+```
+
+```{r}
+gbmFit
+gbmFit$finalModel
+```
+
+```{r}
+gbmPred <- predict(gbmFit, newdata=testing)
+confusionMatrix(gbmPred, testing$classe)
+```
+
+### **Conclusion**
+It seems both Gradient boosting and Random Forests outperform the Decision Trees. Moreover, Random Forest has been slightly more accurate.
+```{r}
+treeCM <- confusionMatrix(treePred, testing$classe)
+rfCM   <- confusionMatrix(rfPred, testing$classe)
+gbmCM  <- confusionMatrix(gbmPred, testing$classe)
+```
+
+
+```{r}
+AccuracyResults <- data.frame(
+  Model = c('DecisionTree', 'RF', 'GBM'),
+  Accuracy = rbind(treeCM$overall[1], rfCM$overall[1], gbmCM$overall[1])
+)
+print(AccuracyResults)
+
+```
+
+
+As the model fitted with Random Forest model has the better accuracy,  so it will be applied to predict the pmlTest dataset.
+
+```{r}
+print(predict(rfFit, newdata=pmlTest))
+```
+
+
