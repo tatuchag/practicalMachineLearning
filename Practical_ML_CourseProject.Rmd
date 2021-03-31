@@ -38,16 +38,16 @@ library(tidyr)
 library(rattle)
 library(doParallel)
 set.seed(42)
-setwd("~/data")
+
 ```
 
 ### **Loading train and test datasets**
 
 The raw data comes from files that are loaded into train and test dataframes.
 ```{r}
-pmlTrain <- read.csv('pml-training.csv', header=TRUE,
+pmlTrain <- read.csv('C:/Users/Renata/Documents/data/pml-training.csv', header=TRUE,
                      stringsAsFactors = F, na.strings = c("","NA","#DIV/0!"))
-pmlTest  <- read.csv('pml-testing.csv', header=TRUE,
+pmlTest  <- read.csv('C:/Users/Renata/Documents/data/pml-testing.csv', header=TRUE,
                      stringsAsFactors = F, na.strings = c("","NA", "#DIV/0!"))
 dim(pmlTrain); dim(pmlTest)
 ```
